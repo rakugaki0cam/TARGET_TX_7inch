@@ -29,7 +29,7 @@
 *   2023.02.28  ver.2.00  1.9"LCDへも送信
 *   2023.03.04  ver.2.01  着弾点　赤->明るいオレンジ 　弾痕　黄色->濃いグレイ
 *   2023.03.12  ver.2.02  PT4input GPIO19->12変更。（GPIO19がつねにHighになってしまった）
-*   2023.03.18  ver.2.10  コマンド追加　ターゲット縦位置、エイムポイント寸法
+*   2023.03.18  ver.2.10  コマンド追加　ターゲット縦位置、エイムポイント寸法、バックライト明るさ
 *
 *
 *-- バグ -----------------------------
@@ -112,6 +112,7 @@ volatile uint32_t timePt4tama = 0;
 //WiFi
 esp_now_peer_info_t slaves1 = {};
 esp_now_peer_info_t slaves2 = {};
+esp_now_peer_info_t slaves3 = {};
 esp_now_send_status_t txResult;
 //通信相手のMACアドレスを設定
 #define PEER_NUM 7  //受信表示器の数
@@ -121,7 +122,7 @@ uint8_t s_addr[PEER_NUM][6] = {
   { 0xB8, 0xD6, 0x1A, 0x0E, 0x34, 0xC4 },  // 　黒パチDEVボード ESP32-WROOM-32E
   { 0xB8, 0xD6, 0x1A, 0x0E, 0x35, 0xF0 },  // 　JTAG最小基板 ESP32-WROOM-32E
   { 0xB8, 0xD6, 0x1A, 0x0E, 0x4B, 0x50 },  //4＊タマモニ ESP32-WROOM-32E
-  { 0xDC, 0x54, 0x75, 0xC8, 0x7F, 0xF4 },  // 　M5stampS3 ESP32-S3
+  { 0xDC, 0x54, 0x75, 0xC8, 0x7F, 0xF4 },  //5* M5stampS3 ESP32-S3 送信テスト
   { 0xF4, 0x12, 0xFA, 0xE2, 0x83, 0x68 },  // 　黄色7"LCDタッチ無しボード ESP32-S3-WROOM-1
 };
 
@@ -244,7 +245,7 @@ void setup() {
   Serial.printf("******************************\n");
   //LCD init
   tft.init();
-  tft.setBrightness(200);
+  tft.setBrightness(80);    //250...0.59A, 200...0.50A, 100...0.34A, 80...0.31A, 50...0.27A　やや暗い, 30...0.26A, 0...0.23A
   tft.setRotation(1);
   tft.setColorDepth(24);
   tft.startWrite();
@@ -309,6 +310,17 @@ void setup() {
     Serial.printf("Peer2 set success\n");
   } else {
     Serial.printf("Peer2 set failed!!!\n");
+    //delay(3000);
+  }
+  //peer3_test
+  memcpy(slaves3.peer_addr, &s_addr[5], 6);
+  slaves3.channel = 0;
+  slaves3.encrypt = false;
+  addStatus = esp_now_add_peer(&slaves3);
+  if (addStatus == ESP_OK) {
+    Serial.printf("Peer3(test) set success\n");
+  } else {
+    Serial.printf("Peer3(test) set failed!!!\n");
     //delay(3000);
   }
 
@@ -650,10 +662,13 @@ void target_graph_initialize(void) {
   //エイムポイント
 #define AIM_POINT_R 1  //mm
   aimY = targetY0 - aimPointY * SCALE_H;
-  tft.fillEllipse(targetX0, aimY, AIM_POINT_R * SCALE_W, AIM_POINT_R * SCALE_H, TFT_DARKGREY);
-  tft.drawFastHLine(targetX0 - 25, aimY, 50, TFT_DARKGREY);  //目盛
-  sprintf(s, "%3d", (int8_t)aimPointY);
-  tft.drawString(s, targetX0 + 30, aimY);  //数字
+  if (aimY > TARGET_Y_MIN){
+    tft.fillEllipse(targetX0, aimY, AIM_POINT_R * SCALE_W, AIM_POINT_R * SCALE_H, TFT_DARKGREY);
+    tft.drawFastHLine(targetX0 - 40, aimY, 80, TFT_DARKGREY);  //目盛
+    sprintf(s, "%3d", (int8_t)aimPointY);
+    tft.setTextDatum(middle_left);  //表示位置座標指定を中心に
+    tft.drawString(s, targetX0 + 45, aimY);  //数字
+  }
 
   //点数
   tft.setFont(&fonts::Font4);
@@ -829,6 +844,7 @@ void tamamoniCommandCheck(char* tmp_str) {
   char reset[] = "RESET";
   char offset[] = "OFFSET";
   char aimpoint[] = "AIMPOINT";
+  char brightness[] = "BRIGHT";
   float val = 0;
 
   uint8_t num = sscanf(tmp_str, "TARGET_%s %f END", command, &val);   //valのところの数字は無くても正常に動くみたい
@@ -845,24 +861,26 @@ void tamamoniCommandCheck(char* tmp_str) {
   } else if (strcmp(reset, command) == 0) {
     Serial.println("** RESET ESP32 in 3 second **");
     //LCD
-    tft.setCursor(50, 300);
+    tft.setTextDatum(top_center);  //表示位置座標指定を中心に
     tft.setTextSize(2);
     tft.setTextColor(TFT_RED, TFT_BLACK);
-    tft.printf("RESET");
+    tft.drawString(" *** RESET ESP32 *** ", targetX0, 250);
     delay(3000);
     ESP.restart();  ////////////////////// RESET
 
   } else if (strcmp(offset, command) == 0) {
-    Serial.println("target Y offset");
-    constrain(val, -50, 50);
-    targetY0offset = val;
+    targetY0offset = constrain(val, -35, 40);
+    Serial.printf("target Y offset %5.1f \n", targetY0offset);
     target_reset();  //ターゲットを再描画
 
   } else if (strcmp(aimpoint, command) == 0) {
     Serial.println("aimpoint set");
-    constrain(val, 30, 100);
-    aimPointY = val;
+    aimPointY = constrain(val, 30, 100);
     target_reset();  //ターゲットを再描画
+
+} else if (strcmp(brightness, command) == 0) {
+    Serial.println("LCD backlight brightness set");
+    tft.setBrightness((uint8_t)constrain(val, 10, 250));
 
   } else {
     Serial.println("invalid command");
