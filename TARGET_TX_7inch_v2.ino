@@ -29,6 +29,11 @@
 *   2023.02.28  ver.2.00  1.9"LCDへも送信
 *   2023.03.04  ver.2.01  着弾点　赤->明るいオレンジ 　弾痕　黄色->濃いグレイ
 *   2023.03.12  ver.2.02  PT4input GPIO19->12変更。（GPIO19がつねにHighになってしまった）
+*   2023.03.18  ver.2.10  コマンド追加　ターゲット縦位置、エイムポイント寸法
+*
+*
+*-- バグ -----------------------------
+*起動時の最初だけ、ペアリングがないときに　変なデータが入って表示してしまう
 *
 */
 
@@ -248,7 +253,7 @@ void setup() {
   tft.setCursor(0, 0);
   tft.setTextSize(1);
   tft.setTextColor(TFT_GREEN);
-  tft.setTextWrap(false);       //改行しない
+  tft.setTextWrap(false);  //改行しない
   tft.printf("*** Electric Target 7inch  ESP-NOW --> Tamamoni Rx ***");
   target_graph_initialize();
 
@@ -449,6 +454,7 @@ void loop() {
   if (receiveFlag == 1) {
     //Serial.printf("%s'\n", tmp);
     tamamoniCommandCheck((char*)tmp);  //コマンドが含まれていないかチェック
+
     if (pairFlag == 0) {
       pairFlag = 1;
       Serial.println("Pairing success");
@@ -475,38 +481,6 @@ void loop() {
   }
 }
 
-
-// Tamamoni Command ------------------------------------------------------------------------------------------
-void tamamoniCommandCheck(char* tmp_str) {
-  //タマモニからの指令を確認し実行
-  char command[10] = { 0 };
-  char clear[] = "CLEAR";
-  char reset[] = "RESET";
-
-  uint8_t num = sscanf(tmp_str, "TARGET_%s END", command);
-  if (num == 0) {
-    //型が合わなかったとき
-    return;
-  }
-  //コマンド
-  Serial.printf("Detect tamamoni command :%s  --- ", command);
-  if (strcmp(clear, command) == 0) {
-    Serial.println("target clear!");
-    target_reset();  //ターゲットをクリア
-  } else if (strcmp(reset, command) == 0) {
-    Serial.println("** RESET ESP32 in 3 second **");
-    //LCD
-    tft.setCursor(50, 300);
-    tft.setTextSize(2);
-    tft.setTextColor(TFT_RED, TFT_BLACK);
-    tft.printf("RESET");
-    delay(3000);
-    ESP.restart();  ////////////////////// RESET
-  } else {
-    Serial.println("invalid command");
-  }
-  Serial1.readString();  //捨て読み
-}
 
 // target data calc ------------------------------------------------------------------------------------------
 uint8_t data_uart_calc(char* tmp_str, float* data) {
@@ -586,10 +560,11 @@ uint8_t data_uart_calc(char* tmp_str, float* data) {
 //オフセット [mm]   移動できるように変数に代入
 float targetX0offset = 0.0;   //マト表示横方向のオフセット　＋：左へ
 float targetY0offset = 15.0;  //マト表示高さのオフセット   ＋：下へ
+float aimPointY = 74.0;       //狙点高さ
 //offset [pixel]
 int16_t targetX0, targetY0;                  //ターゲット中心
 int16_t apsXmin, apsXmax, apsYmin, apsYmax;  //ターゲット紙のサイズ
-
+int16_t aimY;                                //エイムポイント高さ
 
 void target_graph_initialize(void) {
   //ターゲット画面の初期表示
@@ -672,6 +647,13 @@ void target_graph_initialize(void) {
       tft.drawString(s, targetX0 - 15, ya);  //数字
     }
   }
+  //エイムポイント
+#define AIM_POINT_R 1  //mm
+  aimY = targetY0 - aimPointY * SCALE_H;
+  tft.fillEllipse(targetX0, aimY, AIM_POINT_R * SCALE_W, AIM_POINT_R * SCALE_H, TFT_DARKGREY);
+  tft.drawFastHLine(targetX0 - 25, aimY, 50, TFT_DARKGREY);  //目盛
+  sprintf(s, "%3d", (int8_t)aimPointY);
+  tft.drawString(s, targetX0 + 30, aimY);  //数字
 
   //点数
   tft.setFont(&fonts::Font4);
@@ -836,4 +818,54 @@ void draw_impact_point(int16_t x, int16_t y, uint16_t color) {
   tft.drawEllipse(draw_x, draw_y, rx, ry, color);
 
   return;
+}
+
+
+// Tamamoni TARGET Command ------------------------------------------------------------------------------------------
+void tamamoniCommandCheck(char* tmp_str) {
+  //タマモニからの指令を確認し実行
+  char command[10] = { 0 };  //9文字まで
+  char clear[] = "CLEAR";
+  char reset[] = "RESET";
+  char offset[] = "OFFSET";
+  char aimpoint[] = "AIMPOINT";
+  float val = 0;
+
+  uint8_t num = sscanf(tmp_str, "TARGET_%s %f END", command, &val);   //valのところの数字は無くても正常に動くみたい
+  if (num == 0) {
+    //型が合わなかったとき
+    return;
+  }                                                                     
+  //コマンド
+  Serial.printf("Detect tamamoni command(%d) :%s   %f --- ", num, command, val);
+  if (strcmp(clear, command) == 0) {
+    Serial.println("target clear!");
+    target_reset();  //ターゲットをクリア
+
+  } else if (strcmp(reset, command) == 0) {
+    Serial.println("** RESET ESP32 in 3 second **");
+    //LCD
+    tft.setCursor(50, 300);
+    tft.setTextSize(2);
+    tft.setTextColor(TFT_RED, TFT_BLACK);
+    tft.printf("RESET");
+    delay(3000);
+    ESP.restart();  ////////////////////// RESET
+
+  } else if (strcmp(offset, command) == 0) {
+    Serial.println("target Y offset");
+    constrain(val, -50, 50);
+    targetY0offset = val;
+    target_reset();  //ターゲットを再描画
+
+  } else if (strcmp(aimpoint, command) == 0) {
+    Serial.println("aimpoint set");
+    constrain(val, 30, 100);
+    aimPointY = val;
+    target_reset();  //ターゲットを再描画
+
+  } else {
+    Serial.println("invalid command");
+  }
+  Serial1.readString();  //捨て読み
 }
