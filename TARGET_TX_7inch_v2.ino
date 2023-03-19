@@ -30,6 +30,7 @@
 *   2023.03.04  ver.2.01  着弾点　赤->明るいオレンジ 　弾痕　黄色->濃いグレイ
 *   2023.03.12  ver.2.02  PT4input GPIO19->12変更。（GPIO19がつねにHighになってしまった）
 *   2023.03.18  ver.2.10  コマンド追加　ターゲット縦位置、エイムポイント寸法、バックライト明るさ
+*   2023.03.19  ver.2.11  オフセット方向修正
 *
 *
 *-- バグ -----------------------------
@@ -81,6 +82,7 @@
 #define PT4 12     //Target PT4input
 #define LED_YL 38  //LED Yellow WiFi indicator
 #define LED_BL 20  //LED Blue Pairing
+
 //impact_plot_graph呼び出し時の引数
 #define RESET_NONE 0
 #define RESET_DONE 1
@@ -244,8 +246,9 @@ void setup() {
   Serial.printf("*    ESP-Now (2.4GHz WiFi)   *\n");
   Serial.printf("******************************\n");
   //LCD init
+#define LCD_BRIGHTNESS 90
   tft.init();
-  tft.setBrightness(80);    //250...0.59A, 200...0.50A, 100...0.34A, 80...0.31A, 50...0.27A　やや暗い, 30...0.26A, 0...0.23A
+  tft.setBrightness(LCD_BRIGHTNESS);    //250...0.59A, 200...0.50A, 100...0.34A, 90...0.33A, 80...0.31A, 50...0.27A　やや暗い, 30...0.26A, 0...0.23A
   tft.setRotation(1);
   tft.setColorDepth(24);
   tft.startWrite();
@@ -396,6 +399,7 @@ void loop() {
     uint32_t timeDataRxComp = micros();
 #endif
     //LCD 7"
+    tft.setTextWrap(false);   //テキスト折り返さない
     tft.setCursor(0, 30);
     tft.setTextSize(1);
     tft.setTextColor(TFT_GREEN, TFT_BLACK);
@@ -530,10 +534,10 @@ uint8_t data_uart_calc(char* tmp_str, float* data) {
 #define APS_D_10 22    //10点外側
 #define APS_D_8 35
 #define APS_D_5 50
-#define APS_WIDTH 91                                           //横幅
-#define APS_HEIGHTU 67                                         //上側
-#define APS_HEIGHTD 61                                         //下側
-#define SCORE_X_10 ((APS_D_10p1 - APS_D_X) / 4 + APS_D_X / 2)  //点数表示中心位置
+#define APS_WIDTH 91                                            //横幅
+#define APS_HIGHTU 67                                           //上側
+#define APS_HIGHTD 61                                           //下側
+#define SCORE_X_10 ((APS_D_10p1 - APS_D_X) / 4 + APS_D_X / 2)   //点数表示中心位置
 #define SCORE_X_8 ((APS_D_8 - APS_D_10) / 4 + APS_D_10 / 2)
 #define SCORE_X_5 ((APS_D_5 - APS_D_8) / 4 + APS_D_8 / 2)
 #define U_LINE_X0 3.5  // 中心振り分け
@@ -570,8 +574,8 @@ uint8_t data_uart_calc(char* tmp_str, float* data) {
 
 
 //オフセット [mm]   移動できるように変数に代入
-float targetX0offset = 0.0;   //マト表示横方向のオフセット　＋：左へ
-float targetY0offset = 15.0;  //マト表示高さのオフセット   ＋：下へ
+float targetX0offset = 0.0;   //マト表示横方向のオフセット　＋：右へ
+float targetY0offset = -15.0;  //マト表示高さのオフセット   ＋：上へ
 float aimPointY = 74.0;       //狙点高さ
 //offset [pixel]
 int16_t targetX0, targetY0;                  //ターゲット中心
@@ -594,8 +598,8 @@ void target_graph_initialize(void) {
 
   //ターゲットの計算
   //offset [pixel]
-  targetX0 = (int16_t)(TARGET_X0 - targetX0offset * SCALE_W);
-  targetY0 = (int16_t)(TARGET_Y0 + targetY0offset * SCALE_H);
+  targetX0 = (int16_t)(TARGET_X0 + targetX0offset * SCALE_W);
+  targetY0 = (int16_t)(TARGET_Y0 - targetY0offset * SCALE_H);
   //APSマト紙 [pixel]
   apsXmin = targetX0 - SCALE_W * (APS_WIDTH / 2);
   if (apsXmin < TARGET_X_MIN) {
@@ -605,11 +609,11 @@ void target_graph_initialize(void) {
   if (apsXmax > TARGET_X_MAX) {
     apsXmax = TARGET_X_MAX;
   }
-  apsYmin = targetY0 - SCALE_H * APS_HEIGHTU;
+  apsYmin = targetY0 - SCALE_H * APS_HIGHTU;
   if (apsYmin < TARGET_Y_MIN) {
     apsYmin = TARGET_Y_MIN;
   }
-  apsYmax = targetY0 + SCALE_H * APS_HEIGHTD;
+  apsYmax = targetY0 + SCALE_H * APS_HIGHTD;
   if (apsYmax > TARGET_Y_MAX) {
     apsYmax = TARGET_Y_MAX;
   }
@@ -663,11 +667,20 @@ void target_graph_initialize(void) {
 #define AIM_POINT_R 1  //mm
   aimY = targetY0 - aimPointY * SCALE_H;
   if (aimY > TARGET_Y_MIN){
-    tft.fillEllipse(targetX0, aimY, AIM_POINT_R * SCALE_W, AIM_POINT_R * SCALE_H, TFT_DARKGREY);
-    tft.drawFastHLine(targetX0 - 40, aimY, 80, TFT_DARKGREY);  //目盛
+    uint16_t aimColor;
+    if (aimPointY > APS_HIGHTU){
+      aimColor = TFT_WHITE;
+    }else if (aimPointY < APS_HIGHTU){
+      aimColor = TFT_BLACK;
+    }else{
+      aimColor = TFT_DARKGRAY;
+    }
+    tft.fillEllipse(targetX0, aimY, AIM_POINT_R * SCALE_W, AIM_POINT_R * SCALE_H, aimColor);
+    tft.drawFastHLine(targetX0 - 40, aimY, 80, aimColor);  //目盛
     sprintf(s, "%3d", (int8_t)aimPointY);
-    tft.setTextDatum(middle_left);  //表示位置座標指定を中心に
-    tft.drawString(s, targetX0 + 45, aimY);  //数字
+    tft.setTextDatum(middle_left);            //表示位置座標指定を中心に
+    tft.setTextColor(aimColor);               //重ね書き
+    tft.drawString(s, targetX0 + 45, aimY);   //数字
   }
 
   //点数
@@ -733,8 +746,8 @@ uint8_t impact_plot_graph(float* data, bool reset) {
 #define TFT_DARKDARKGRAY 0x1082
   draw_impact_point(x, y, TFT_DARKDARKGRAY);
 
-  x = data[0] + targetX0offset;  //前回値として保存される
-  y = data[1] + targetY0offset;
+  x = data[0] - targetX0offset;  //前回値として保存される
+  y = data[1] - targetY0offset;
   //オフセットを含めたデータに書き換え
   data[0] = x;
   data[1] = y;
@@ -869,18 +882,18 @@ void tamamoniCommandCheck(char* tmp_str) {
     ESP.restart();  ////////////////////// RESET
 
   } else if (strcmp(offset, command) == 0) {
-    targetY0offset = constrain(val, -35, 40);
+    targetY0offset = constrain(val, -40, 35);
     Serial.printf("target Y offset %5.1f \n", targetY0offset);
     target_reset();  //ターゲットを再描画
 
   } else if (strcmp(aimpoint, command) == 0) {
     Serial.println("aimpoint set");
-    aimPointY = constrain(val, 30, 100);
+    aimPointY = constrain(val, 30, 120);
     target_reset();  //ターゲットを再描画
 
 } else if (strcmp(brightness, command) == 0) {
     Serial.println("LCD backlight brightness set");
-    tft.setBrightness((uint8_t)constrain(val, 10, 250));
+    tft.setBrightness((uint8_t)constrain(val, 0, 250));
 
   } else {
     Serial.println("invalid command");
