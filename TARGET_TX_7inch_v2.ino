@@ -27,14 +27,15 @@
 *                         delayMicroseconds(500)をいれた
 *                         ペアリングチェック...タマモニからの受信が約7秒ない時ペアリングフェイル
 *   2023.02.28  ver.2.00  1.9"LCDへも送信
-*   2023.03.04  ver.2.01  着弾点　赤->明るいオレンジ 　弾痕　黄色->濃いグレイ
-*   2023.03.12  ver.2.02  PT4input GPIO19->12変更。（GPIO19がつねにHighになってしまった）
+*   2023.03.04  ver.2.01  着弾点　赤->明るいオレンジ->赤、 　弾痕　黄色->濃いグレイ
+*   2023.03.12  ver.2.02  PT4input GPIO19->12変更。（GPIO19がつねにHighに？なってしまった）
 *   2023.03.18  ver.2.10  コマンド追加　ターゲット縦位置、エイムポイント寸法、バックライト明るさ
 *   2023.03.19  ver.2.11  オフセット方向修正
+*   2023.03.25  ver.2.12  着弾データが完全な時だけ着弾表示するに変更
 *
 *
 *-- バグ -----------------------------
-*起動時の最初だけ、ペアリングがないときに　変なデータが入って表示してしまう
+*起動時の最初だけ、　変なデータが入って表示してしまうことがある
 *
 */
 
@@ -261,7 +262,7 @@ void setup() {
   tft.printf("*** Electric Target 7inch  ESP-NOW --> Tamamoni Rx ***");
   target_graph_initialize();
 
-  Serial1.begin(115200, SERIAL_8N1, PIN_RX, PIN_TX);  //ターゲットよりデータ受信用  ピン指定
+  Serial1.begin(115200, SERIAL_8N1, PIN_RX, PIN_TX);  //ターゲットよりデータ受信用  ピン指定有り
   while (!Serial1) {
     //ポートを開くまでの待ち
   }
@@ -421,14 +422,13 @@ void loop() {
 #if DEBUG_TIMING
       timeCalcComp = micros();
 #endif
-      //着弾表示
-      score = impact_plot_graph(impactData, RESET_NONE);
-      //ターゲットオフセット分を補正した数値が入って戻ってくる
-      //WiFi送信するデータを書き換え
-      //Serial.printf("Rx data = '%s'  ", tmp);
-      sprintf((char*)tmp, "BINX0Y0dT %8.3f %8.3f %8.4f END ", impactData[0], impactData[1], impactData[2]);  //最後のコンマは付けない
-                                                                                                             //Serial.printf("+ offset = '%s'\n", tmp);
-
+      if (ans == 0){
+        //着弾表示
+        score = impact_plot_graph(impactData, RESET_NONE);
+        //ターゲットオフセット分を補正した数値が入って戻ってくる       
+        //WiFi送信するデータを書き換え整形
+        sprintf((char*)tmp, "BINX0Y0dT %8.3f %8.3f %8.4f END ", impactData[0], impactData[1], impactData[2]);  //最後のコンマは付けない
+      }
 #if DEBUG_TIMING
       timePlotComp = micros();
 #endif
@@ -574,9 +574,12 @@ uint8_t data_uart_calc(char* tmp_str, float* data) {
 
 
 //オフセット [mm]   移動できるように変数に代入
-float targetX0offset = 0.0;   //マト表示横方向のオフセット　＋：右へ
-float targetY0offset = -15.0;  //マト表示高さのオフセット   ＋：上へ
-float aimPointY = 74.0;       //狙点高さ
+#define OFFSET_X0_DEFAULT 0.0
+#define OFFSET_Y0_DEFAULT -15.0
+#define AIM_Y_DEFAULT 74.0
+float targetX0offset = OFFSET_X0_DEFAULT;   //マト表示横方向のオフセット　＋：右へ
+float targetY0offset = OFFSET_Y0_DEFAULT;   //マト表示高さのオフセット   ＋：上へ
+float aimPointY = AIM_Y_DEFAULT;            //狙点高さ
 //offset [pixel]
 int16_t targetX0, targetY0;                  //ターゲット中心
 int16_t apsXmin, apsXmax, apsYmin, apsYmax;  //ターゲット紙のサイズ
@@ -855,6 +858,7 @@ void tamamoniCommandCheck(char* tmp_str) {
   char command[10] = { 0 };  //9文字まで
   char clear[] = "CLEAR";
   char reset[] = "RESET";
+  char defaultSet[] = "DEFAULT";
   char offset[] = "OFFSET";
   char aimpoint[] = "AIMPOINT";
   char brightness[] = "BRIGHT";
@@ -881,6 +885,14 @@ void tamamoniCommandCheck(char* tmp_str) {
     delay(3000);
     ESP.restart();  ////////////////////// RESET
 
+  } else if (strcmp(defaultSet, command) == 0) {
+    targetX0offset = OFFSET_X0_DEFAULT;
+    targetY0offset = OFFSET_Y0_DEFAULT;
+    aimPointY = AIM_Y_DEFAULT;
+    tft.setBrightness(LCD_BRIGHTNESS);
+    Serial.printf("target default set \n");
+    target_reset();  //ターゲットを再描画
+    
   } else if (strcmp(offset, command) == 0) {
     targetY0offset = constrain(val, -40, 35);
     Serial.printf("target Y offset %5.1f \n", targetY0offset);
